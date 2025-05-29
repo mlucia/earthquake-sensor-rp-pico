@@ -1,0 +1,277 @@
+To replace the MPU6050 with the LSM6DS3 in your MicroPython code for the Raspberry Pi Pico, we need to adapt the code to account for the differences in hardware specifications, I2C addresses, register maps, and configuration. The provided code uses the MPU6050 for seismic detection, displaying data on an OLED screen and logging via UART, with a Kalman filter for noise reduction. Below, I outline the necessary changes to switch to the LSM6DS3, focusing on maintaining the same functionality (reading accelerometer data, applying Kalman filtering, detecting seismic events, and displaying/logging results).
+
+### Key Differences Between MPU6050 and LSM6DS3
+1. **I2C Address**:
+   - MPU6050: 0x68 (or 0x69 if AD0 is high).
+   - LSM6DS3: 0x6A (or 0x6B if SA0 is high).
+2. **Register Map**:
+   - MPU6050 registers (e.g., `ACCEL_XOUT_H` at 0x3B) differ from LSM6DS3 registers (e.g., `OUTX_L_XL` at 0x28 for accelerometer x-axis low byte).
+   - LSM6DS3 has a different configuration process, with registers like `CTRL1_XL` for accelerometer settings.
+3. **Sensitivity and Scaling**:
+   - MPU6050: ±2g range gives 16384 LSB/g (as in your code).
+   - LSM6DS3: ±2g range gives 0.061 mg/LSB (or ~16393 LSB/g, close but slightly different). The datasheet specifies scaling factors per range.
+4. **Library vs. Direct Register Access**:
+   - Your code uses direct I2C register access for the MPU6050. For the LSM6DS3, we can either continue with direct register access (using the LSM6DS3 datasheet) or use a library like `adafruit_lsm6ds` (adapted for MicroPython via Blinka).
+   - Since your code avoids external libraries for the MPU6050, I’ll focus on direct register access to maintain a similar approach, but I’ll note library options for simplicity.
+5. **Configuration**:
+   - MPU6050: Configured with `PWR_MGMT_1`, `ACCEL_CONFIG`, `CONFIG`, `SMPLRT_DIV` for ~500 Hz sampling and ±2g range.
+   - LSM6DS3: Requires configuring `CTRL1_XL` (accelerometer), `CTRL2_G` (gyroscope, if used), and `CTRL3_C` for general settings, with different sampling rates and ranges.
+
+### Hardware Connection Changes
+- **MPU6050 Connections** (from your code):
+  - I2C0: SCL (Pin 1, GP1), SDA (Pin 0, GP0)
+  - VCC: 3.3V (Pico pin 36)
+  - GND: GND (Pico pin 38)
+  - AD0: Likely grounded (for 0x68 address, as used in code)
+- **LSM6DS3 Connections**:
+  - I2C0: SCL (Pin 1, GP1), SDA (Pin 0, GP0) – same as MPU6050
+  - VCC: 3.3V (Pico pin 36)
+  - GND: GND (Pico pin 38)
+  - SA0: Grounded (for 0x6A address) or 3.3V (for 0x6B)
+  - CS: 3.3V (to select I2C mode; LSM6DS3 supports SPI or I2C)
+- **Verification**:
+  - Ensure 4.7kΩ–10kΩ pull-up resistors on SDA and SCL (typically on breakout boards or external).
+  - Check the LSM6DS3 module’s datasheet for onboard regulator requirements (most support 3.3V directly).
+  - Run an I2C scan to confirm the address:
+    ```python
+    print(i2c0.scan())  # Should return [106] for 0x6A
+    ```
+
+### Software Changes
+The code needs updates to the MPU6050-specific sections: initialization, register addresses, and data reading. The Kalman filter, OLED, UART, and RTC components remain unchanged, as they are independent of the sensor. I’ll provide a modified version of the code using direct register access for the LSM6DS3, matching the MPU6050’s ±2g range and ~500 Hz sampling rate.
+
+#### LSM6DS3 Registers and Configuration
+- **Key Registers** (from LSM6DS3 datasheet, e.g., STMicroelectronics AN4650):
+  - `CTRL1_XL` (0x10): Accelerometer control (set range, data rate).
+  - `CTRL3_C` (0x12): General control (enable block data update, auto-increment).
+  - `OUTX_L_XL` (0x28): Accelerometer x-axis low byte (to 0x2D for x, y, z).
+  - Sampling rate: Set to 833 Hz (closest to 500 Hz; options are 12.5, 26, 52, 104, 208, 416, 833, 1666 Hz).
+  - Range: Set to ±2g (options: ±2g, ±4g, ±8g, ±16g).
+- **Scaling**: ±2g range gives 0.061 mg/LSB, so 1g ≈ 16393 LSB (vs. 16384 for MPU6050, minor adjustment needed).
+
+#### Modified Code
+Below is the updated code, replacing MPU6050-specific sections with LSM6DS3 equivalents. Changes are highlighted in comments.
+
+```python
+from machine import I2C, Pin, UART, RTC
+from utime import sleep_us, ticks_ms
+import math
+from ssd1306 import SSD1306_I2C  # Requires ssd1306.py library
+
+# I2C setups
+i2c0 = I2C(0, scl=Pin(1), sda=Pin(0), freq=400000)  # LSM6DS3 on I2C0
+i2c1 = I2C(1, scl=Pin(3), sda=Pin(2), freq=400000)  # RTC and OLED on I2C1
+
+# UART setup
+uart = UART(1, baudrate=115200, tx=Pin(4), rx=Pin(5))
+uart.write(b"LSM6DS3 Earthquake Sensor with RTC and OLED Started\n")  # Updated message
+
+# LSM6DS3 Registers
+LSM6DS3_ADDR = 0x6A  # Changed from 0x68 (MPU6050) to 0x6A (SA0 low)
+CTRL1_XL = 0x10      # Accelerometer control
+CTRL3_C = 0x12       # General control
+OUTX_L_XL = 0x28     # Accelerometer output start
+
+# RTC and OLED constants (unchanged)
+RTC_ADDR = 0x68
+OLED_ADDR = 0x3C
+WIDTH = 128
+HEIGHT = 64
+oled = SSD1306_I2C(WIDTH, HEIGHT, i2c1)
+
+# Kalman Filter Class (unchanged)
+class KalmanFilter:
+    def __init__(self):
+        self.x = 0.0
+        self.p = 1.0
+        self.q = 0.001
+        self.r = 0.0004  # LSM6DS3 noise similar (~400 µg/√Hz at 833 Hz)
+        self.k = 0.0
+
+    def update(self, measurement):
+        self.p = self.p + self.q
+        self.k = self.p / (self.p + self.r)
+        self.x = self.x + self.k * (measurement - self.x)
+        self.p = (0.5 - self.k) * self.p
+        return self.x
+
+# Initialize LSM6DS3
+def lsm6ds3_init():
+    try:
+        # Enable block data update and auto-increment
+        i2c0.writeto_mem(LSM6DS3_ADDR, CTRL3_C, bytes([0x44]))  # BDU=1, IF_INC=1
+        # Accelerometer: 833 Hz, ±2g (0x60 = ODR 833 Hz, FS ±2g)
+        i2c0.writeto_mem(LSM6DS3_ADDR, CTRL1_XL, bytes([0x60]))
+        return True
+    except Exception as e:
+        oled.fill(0)
+        oled.text("LSM6DS3 Error", 0, 0)  # Updated error message
+        oled.text(str(e), 0, 10)
+        oled.show()
+        return False
+
+# Initialize RTC (unchanged)
+def rtc_init():
+    try:
+        rtc = machine.RTC()
+        rtc.datetime((2025, 5, 21, 6, 12, 42, 0, 0))  # Same initial time
+    except Exception as e:
+        oled.fill(0)
+        oled.text("RTC Error", 0, 0)
+        oled.text(str(e), 0, 10)
+        oled.show()
+        return False
+    return True
+
+# Read LSM6DS3 accelerometer data
+def read_accel():
+    try:
+        data = i2c0.readfrom_mem(LSM6DS3_ADDR, OUTX_L_XL, 6)
+        # LSM6DS3: Two's complement, little-endian
+        a_x = (data[1] << 8 | data[0]) if (data[1] << 8 | data[0]) < 32768 else (data[1] << 8 | data[0]) - 65536
+        a_y = (data[3] << 8 | data[2]) if (data[3] << 8 | data[2]) < 32768 else (data[3] << 8 | data[2]) - 65536
+        a_z = (data[5] << 8 | data[4]) if (data[5] << 8 | data[4]) < 32768 else (data[5] << 8 | data[4]) - 65536
+        return a_x, a_y, a_z
+    except Exception as e:
+        oled.fill(0)
+        oled.text("Read Error", 0, 0)
+        oled.text(str(e), 0, 10)
+        oled.show()
+        return 0, 0, 0
+
+# Convert to g
+def convert_to_g(raw_x, raw_y, raw_z):
+    accel_scale = 16393.0  # LSM6DS3 ±2g: 0.061 mg/LSB ≈ 16393 LSB/g
+    return raw_x / accel_scale, raw_y / accel_scale, raw_z / accel_scale
+
+# Draw seismic graph (unchanged)
+def draw_seismic_graph(magnitudes):
+    oled.fill(0)
+    oled.text("Seismic Event", 0, 0)
+    if len(magnitudes) > 0:
+        max_mag = max(magnitudes)
+        for i in range(min(len(magnitudes), WIDTH)):
+            height = int((magnitudes[i] / max(max_mag, 0.1)) * (HEIGHT - 20))
+            oled.vline(i, HEIGHT - 10 - height, height, 1)
+    oled.show()
+
+# Main loop
+if not lsm6ds3_init() or not rtc_init():  # Updated to lsm6ds3_init
+    while True:
+        sleep_us(1000000)
+sample_interval_us = 2000  # Maintain 500 Hz
+threshold_g = 1
+kalman_x, kalman_y, kalman_z = KalmanFilter(), KalmanFilter(), KalmanFilter()
+magnitudes = []
+
+while True:
+    start_time = RTC().datetime()
+    raw_x, raw_y, raw_z = read_accel()
+    if raw_x == 0 and raw_y == 0 and raw_z == 0:
+        continue
+    a_x_raw, a_y_raw, a_z_raw = convert_to_g(raw_x, raw_y, raw_z)
+    a_x_filt = kalman_x.update(a_x_raw)
+    a_y_filt = kalman_y.update(a_y_raw)
+    a_z_filt = kalman_z.update(a_z_raw - 1.0)  # Subtract 1g for z-axis
+    magnitude_raw = math.sqrt(a_x_raw**2 + a_y_raw**2 + a_z_raw**2)
+    magnitude_filt = math.sqrt(a_x_filt**2 + a_y_filt**2 + a_z_filt**2)
+    seismic_event = magnitude_raw > threshold_g or magnitude_filt > threshold_g
+    
+    # Update magnitudes buffer (unchanged)
+    magnitudes.append(magnitude_filt)
+    if len(magnitudes) > WIDTH:
+        magnitudes.pop(0)
+    
+    # OLED status (unchanged)
+    oled.fill(0)
+    oled.text("Status: Running", 0, 0)
+    oled.text(f"Mag: {magnitude_filt:.2f}g", 0, 10)
+    oled.text(f"Event: {1 if seismic_event else 0}", 0, 20)
+    if seismic_event:
+        draw_seismic_graph(magnitudes)
+    else:
+        oled.text("No Event", 0, 30)
+    oled.show()
+    
+    # UART output (unchanged)
+    timestamp = (start_time[4] * 3600 + start_time[5] * 60 + start_time[6]) * 1000
+    output = "{:d},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:d}\n".format(
+        timestamp, a_x_raw, a_y_raw, a_z_raw, a_x_filt, a_y_filt, a_z_filt, 1 if seismic_event else 0
+    )
+    uart.write(output.encode())
+    
+    # Maintain 500 Hz (unchanged)
+    sleep_us(max(0, sample_interval_us - (ticks_ms() - start_time[6] * 1000) * 1000))
+```
+
+### Specific Changes
+1. **I2C Address**:
+   - Changed `MPU6050_ADDR = 0x68` to `LSM6DS3_ADDR = 0x6A`.
+2. **Register Definitions**:
+   - Replaced MPU6050 registers (`PWR_MGMT_1`, `ACCEL_CONFIG`, etc.) with LSM6DS3 registers (`CTRL1_XL`, `CTRL3_C`, `OUTX_L_XL`).
+3. **Initialization (`lsm6ds3_init`)**:
+   - Replaced MPU6050 initialization with LSM6DS3 settings:
+     - `CTRL3_C = 0x44`: Enables block data update (BDU) and register auto-increment.
+     - `CTRL1_XL = 0x60`: Sets accelerometer to 833 Hz (ODR_XL=0110) and ±2g (FS_XL=00).
+   - Note: 833 Hz is the closest to 500 Hz; adjust `sample_interval_us` if a different rate is needed (e.g., 416 Hz with `CTRL1_XL = 0x50`).
+4. **Read Accelerometer (`read_accel`)**:
+   - Updated to read from `OUTX_L_XL` (0x28) instead of `ACCEL_XOUT_H` (0x3B).
+   - LSM6DS3 uses little-endian format, so byte order is adjusted (`data[1] << 8 | data[0]`).
+5. **Scaling (`convert_to_g`)**:
+   - Changed `accel_scale = 16384.0` to `16393.0` (based on LSM6DS3 ±2g sensitivity: 0.061 mg/LSB).
+6. **UART Message**:
+   - Updated startup message to reflect LSM6DS3.
+7. **Error Messages**:
+   - Changed “MPU6050 Error” to “LSM6DS3 Error” in `lsm6ds3_init`.
+8. **Kalman Filter**:
+   - Unchanged, as the noise parameter (`r = 0.0004`) is suitable for LSM6DS3, which has similar noise (~400 µg/√Hz at 833 Hz vs. MPU6050’s ~400 µg/√Hz at 500 Hz).
+
+### Alternative: Using a Library
+If you prefer a simpler approach, you can use the Adafruit LSM6DS3 library with Blinka:
+- Install:
+  ```bash
+  pip install adafruit-blinka adafruit-circuitpython-lsm6ds
+  ```
+- Modified initialization and read:
+  ```python
+  import adafruit_lsm6ds
+  lsm = adafruit_lsm6ds.LSM6DS3(i2c0, address=0x6A)
+  lsm.accelerometer_range = adafruit_lsm6ds.AccelRange.RANGE_2G
+  lsm.accelerometer_data_rate = adafruit_lsm6ds.Rate.RATE_833_HZ
+  # In main loop:
+  a_x_raw, a_y_raw, a_z_raw = lsm.acceleration  # Returns m/s², convert to g
+  a_x_raw /= 9.81  # Convert m/s² to g
+  a_y_raw /= 9.81
+  a_z_raw /= 9.81
+  ```
+- Pros: Simplifies configuration and reading.
+- Cons: Requires Blinka, which may increase memory usage on the Pico.
+
+### Verification
+- **I2C Scan**:
+  ```python
+  print(i2c0.scan())  # Should return [106] for 0x6A
+  ```
+- **Calibration**: The LSM6DS3 may require offset calibration. Adjust `a_z_filt = kalman_z.update(a_z_raw - 1.0)` if the z-axis offset differs (test with the sensor at rest).
+- **Sampling Rate**: The code uses 833 Hz for LSM6DS3 (vs. 500 Hz for MPU6050). If 500 Hz is critical, adjust `sample_interval_us` or use 416 Hz (`CTRL1_XL = 0x50`).
+- **Noise**: The Kalman filter’s `r` may need tuning if LSM6DS3 noise differs significantly (check datasheet or test empirically).
+
+### Troubleshooting
+- **I2C Errors**: If the LSM6DS3 isn’t detected:
+  - Verify SA0 (grounded for 0x6A) and CS (3.3V for I2C).
+  - Check pull-up resistors (4.7kΩ–10kΩ on SDA/SCL).
+  - Try `SoftI2C`:
+    ```python
+    from machine import SoftI2C
+    i2c0 = SoftI2C(scl=Pin(1), sda=Pin(0), freq=400000)
+    ```
+- **Data Accuracy**: If readings seem off, verify the scaling factor (16393 LSB/g) and calibrate offsets.
+- **Library Option**: If direct register access fails, consider a MicroPython-specific LSM6DS3 driver from GitHub (e.g., `micropython-LSM6DS3`).
+
+### Sources
+- LSM6DS3 Datasheet (STMicroelectronics AN4650)
+- MPU6050 Datasheet
+- MicroPython I2C documentation
+- Adafruit CircuitPython LSM6DS3 documentation
+
+If you need help with library installation, calibration, or further adjustments (e.g., adding gyroscope support or changing sampling rates), please let me know!
