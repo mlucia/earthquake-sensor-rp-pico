@@ -8,7 +8,7 @@ i2c0 = I2C(0, scl=Pin(1), sda=Pin(0), freq=400000)  # ADXL345 on I2C0
 i2c1 = I2C(1, scl=Pin(3), sda=Pin(2), freq=400000)  # RTC and OLED on I2C1
 
 # UART setup
-uart = UART(0, baudrate=115200, tx=Pin(4), rx=Pin(5))
+uart = UART(1, baudrate=115200, tx=Pin(4), rx=Pin(5))
 uart.write(b"ADXL345 Earthquake Sensor with RTC and OLED Started\n")
 
 # ADXL345 Registers
