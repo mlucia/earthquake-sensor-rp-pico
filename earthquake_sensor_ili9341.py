@@ -10,8 +10,8 @@ from framebuf import FrameBuffer, RGB565
 VERSION = "0.01"
 
 # WiFi credentials
-SSID = "Lucia1"
-PASSWORD = "scoobydooby"
+SSID = "xxxx"
+PASSWORD = "xxxx"
 
 # WiFi status
 wlan = network.WLAN(network.STA_IF)
