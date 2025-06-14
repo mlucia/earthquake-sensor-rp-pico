@@ -1,0 +1,279 @@
+from machine import I2C, Pin, UART, RTC
+from utime import sleep_us, ticks_us
+import math
+import network
+import socket
+from ssd1306 import SSD1306_I2C
+import machine
+
+# WiFi credentials (replace with your own)
+SSID = "Lucia1"
+PASSWORD = "scoobydooby"
+
+# I2C setups
+i2c0 = I2C(0, scl=Pin(1), sda=Pin(0), freq=400000)  # ADXL345 on I2C0
+i2c1 = I2C(1, scl=Pin(3), sda=Pin(2), freq=400000)  # RTC and OLED on I2C1
+
+# UART setup
+uart = UART(1, baudrate=115200, tx=Pin(4), rx=Pin(5))
+uart.write(b"ADXL345 Earthquake Sensor with RTC, OLED, and Web Server Started\n")
+
+# On-board LED setup (Pico 2 W, Pin 25)
+# led = Pin(25, Pin.OUT)
+led = machine.Pin("LED", machine.Pin.OUT)
+led_state = False
+
+# ADXL345 Registers
+ADXL345_ADDR = 0x53
+POWER_CTL = 0x2D
+DATA_FORMAT = 0x31
+BW_RATE = 0x2C
+DATAX0 = 0x32
+
+# RTC and OLED constants
+RTC_ADDR = 0x68
+OLED_ADDR = 0x3C
+WIDTH = 128
+HEIGHT = 64
+oled = SSD1306_I2C(WIDTH, HEIGHT, i2c1)
+
+# Kalman Filter Class
+class KalmanFilter:
+    def __init__(self):
+        self.x = 0.0
+        self.p = 1.0
+        self.q = 0.001
+        self.r = 0.00015
+        self.k = 0.0
+
+    def update(self, measurement):
+        self.p = self.p + self.q
+        self.k = self.p / (self.p + self.r)
+        self.x = self.x + self.k * (measurement - self.x)
+        self.p = (0.5 - self.k) * self.p
+        return self.x
+
+# Initialize ADXL345
+def adxl345_init():
+    try:
+        i2c0.writeto_mem(ADXL345_ADDR, POWER_CTL, bytes([0x08]))
+        i2c0.writeto_mem(ADXL345_ADDR, DATA_FORMAT, bytes([0x00 | 0x08]))
+        i2c0.writeto_mem(ADXL345_ADDR, BW_RATE, bytes([0x0A]))
+    except Exception as e:
+        oled.fill(0)
+        oled.text("ADXL345 Error", 0, 0)
+        oled.text(str(e), 0, 10)
+        oled.show()
+        return False
+    return True
+
+# Initialize RTC
+rtc = RTC()
+def rtc_init():
+    try:
+        rtc.datetime((2025, 6, 9, 1, 16, 23, 0, 0))
+    except Exception as e:
+        oled.fill(0)
+        oled.text("RTC Error", 0, 0)
+        oled.text(str(e), 0, 10)
+        oled.show()
+        return False
+    return True
+
+# Read ADXL345 data
+def read_accel():
+    try:
+        data = i2c0.readfrom_mem(ADXL345_ADDR, DATAX0, 6)
+        a_x = (data[1] << 8 | data[0]) if (data[1] & 0x80) == 0 else (data[1] << 8 | data[0]) - 0x10000
+        a_y = (data[3] << 8 | data[2]) if (data[3] & 0x80) == 0 else (data[3] << 8 | data[2]) - 0x10000
+        a_z = (data[5] << 8 | data[4]) if (data[5] & 0x80) == 0 else (data[5] << 8 | data[4]) - 0x10000
+        return a_x, a_y, a_z
+    except Exception as e:
+        oled.fill(0)
+        oled.text("Read Error", 0, 0)
+        oled.text(str(e), 0, 10)
+        oled.show()
+        return 0, 0, 0
+
+# Convert to g
+def convert_to_g(raw_x, raw_y, raw_z):
+    accel_scale = 256.0
+    return raw_x / accel_scale, raw_y / accel_scale, raw_z / accel_scale
+
+# Graph seismic event
+def draw_seismic_graph(magnitudes):
+    oled.fill(0)
+    oled.text("Seismic Event", 0, 0)
+    if len(magnitudes) > 0:
+        max_mag = max(magnitudes)
+        for i in range(min(len(magnitudes), WIDTH)):
+            height = int((magnitudes[i] / max(max_mag, 0.1)) * (HEIGHT - 20))
+            oled.vline(i, HEIGHT - 10 - height, height, 1)
+    oled.show()
+
+# WiFi connection
+def connect_to_wifi():
+    wlan = network.WLAN(network.STA_IF)
+    wlan.active(True)
+    wlan.connect(SSID, PASSWORD)
+    max_wait = 10
+    while max_wait > 0:
+        if wlan.status() < 0 or wlan.status() >= 3:
+            break
+        max_wait -= 1
+        print('Waiting for WiFi connection...')
+        sleep_us(1000000)
+    if wlan.status() != 3:
+        oled.fill(0)
+        oled.text("WiFi Failed", 0, 0)
+        oled.show()
+        raise RuntimeError('WiFi connection failed')
+    else:
+        ip = wlan.ifconfig()[0]
+        print('Connected to WiFi, IP:', ip)
+        oled.fill(0)
+        oled.text("WiFi Connected", 0, 0)
+        oled.text("IP: " + ip, 0, 10)
+        oled.show()
+        sleep_us(2000000)
+        return ip
+
+# HTML for scrolling readings
+def webpage(readings):
+    html = """<!DOCTYPE html>
+<html>
+<head>
+    <title>Pico 2 W Earthquake Sensor</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        h1 { text-align: center; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+        th { background-color: #f2f2f2; }
+        .scrollable { max-height: 400px; overflow-y: auto; }
+    </style>
+</head>
+<body>
+    <h1>Earthquake Sensor Readings</h1>
+    <div class="scrollable">
+        <table>
+            <tr><th>Timestamp</th><th>Magnitude (g)</th><th>Event</th></tr>
+"""
+    for reading in readings:
+        timestamp = reading['timestamp']
+        magnitude = reading['magnitude']
+        event = reading['event']
+        html += f"            <tr><td>{timestamp}</td><td>{magnitude:.2f}</td><td>{'Yes' if event else 'No'}</td></tr>\n"
+    html += """        </table>
+    </div>
+</body>
+</html>"""
+    return html
+
+# Start web server
+def start_web_server(ip):
+    addr = socket.getaddrinfo('0.0.0.0', 80)[0][-1]
+    s = socket.socket()
+    s.bind(addr)
+    s.listen(1)
+    print('Web server listening on', addr)
+    return s
+
+# Main loop
+if not adxl345_init() or not rtc_init():
+    while True:
+        sleep_us(1000000)
+
+# Connect to WiFi
+ip = connect_to_wifi()
+
+# Start web server
+server_socket = start_web_server(ip)
+
+sample_interval_us = 2000
+threshold_g = 0.1
+kalman_x, kalman_y, kalman_z = KalmanFilter(), KalmanFilter(), KalmanFilter()
+magnitudes = []
+last_event_time = None
+max_magnitude = 0.0
+graph_display_start = 0
+readings = []  # Store up to 20 recent readings for web display
+
+while True:
+    # Toggle LED
+    led_state = not led_state
+    led.value(1 if led_state else 0)
+
+    start_time_us = ticks_us()
+    start_time = rtc.datetime()
+
+    raw_x, raw_y, raw_z = read_accel()
+    if raw_x == 0 and raw_y == 0 and raw_z == 0:
+        sleep_us(sample_interval_us)
+        continue
+
+    a_x_raw, a_y_raw, a_z_raw = convert_to_g(raw_x, raw_y, raw_z)
+    a_x_filt = kalman_x.update(a_x_raw)
+    a_y_filt = kalman_y.update(a_y_raw)
+    a_z_filt = kalman_z.update(a_z_raw - 1.0)
+    magnitude_raw = math.sqrt(a_x_raw**2 + a_y_raw**2 + a_z_raw**2)
+    magnitude_filt = math.sqrt(a_x_filt**2 + a_y_filt**2 + a_z_filt**2)
+    seismic_event = magnitude_raw > threshold_g or magnitude_filt > threshold_g
+
+    # Update magnitudes buffer for OLED graph
+    magnitudes.append(magnitude_filt)
+    if len(magnitudes) > WIDTH:
+        magnitudes.pop(0)
+
+    # Update event tracking
+    if seismic_event:
+        last_event_time = start_time
+        max_magnitude = max(max_magnitude, magnitude_filt)
+        graph_display_start = ticks_us()
+
+    # Store reading for web display
+    timestamp_ms = (start_time[4] * 3600 + start_time[5] * 60 + start_time[6]) * 1000 + start_time[7] // 1000
+    timestamp_str = f"{start_time[4]:02d}:{start_time[5]:02d}:{start_time[6]:02d}.{start_time[7] // 100000:1d}"
+    readings.append({'timestamp': timestamp_str, 'magnitude': magnitude_filt, 'event': seismic_event})
+    if len(readings) > 20:
+        readings.pop(0)
+
+    # OLED display logic
+    if seismic_event and (ticks_us() - graph_display_start) < 2000000:
+        draw_seismic_graph(magnitudes)
+    else:
+        oled.fill(0)
+        oled.text("Status: Running", 0, 0)
+        time_str = f"Time: {start_time[4]:02d}:{start_time[5]:02d}:{start_time[6]:02d}.{start_time[7] // 100000:1d}"
+        oled.text(time_str, 0, 10)
+        if last_event_time:
+            event_str = f"Last: {last_event_time[4]:02d}:{last_event_time[5]:02d}:{last_event_time[6]:02d}"
+            oled.text(event_str, 0, 20)
+        else:
+            oled.text("Last: None", 0, 20)
+        oled.text(f"Max Mag: {max_magnitude:.2f}g", 0, 30)
+        oled.show()
+
+    # UART output
+    output = "{:d},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:.3f},{:d}\n".format(
+        timestamp_ms, a_x_raw, a_y_raw, a_z_raw, a_x_filt, a_y_filt, a_z_filt, 1 if seismic_event else 0
+    )
+    uart.write(output.encode())
+
+    # Handle web server requests
+    try:
+        cl, addr = server_socket.accept()
+        request = cl.recv(1024)
+        request = str(request)
+        if 'GET / ' in request or 'GET /index.html' in request:
+            response = webpage(readings)
+            cl.send('HTTP/1.0 200 OK\r\nContent-type: text/html\r\n\r\n')
+            cl.send(response)
+        cl.close()
+    except OSError:
+        pass  # Ignore connection errors
+
+    # Maintain 500 Hz
+    elapsed_us = ticks_us() - start_time_us
+    sleep_us(max(0, sample_interval_us - elapsed_us))
