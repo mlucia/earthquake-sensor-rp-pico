@@ -6,8 +6,8 @@ import socket
 from ssd1306 import SSD1306_I2C
 
 # WiFi credentials
-SSID = "Lucia1"
-PASSWORD = "scoobydooby"
+SSID = "xxxx"
+PASSWORD = "xxxx"
 
 # I2C setups
 i2c0 = I2C(0, scl=Pin(1), sda=Pin(0), freq=400000)  # ADXL345 on I2C0
