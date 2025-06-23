@@ -150,9 +150,7 @@ void draw_magnitude_graph() {
 
 void draw_borders() {
     ili9341_rect(0, TOP_WINDOW_Y, WIDTH, TOP_WINDOW_HEIGHT, ILI9341_COLOR(255, 255, 255));
-    ili9341
-
-_rect(0, BOTTOM_WINDOW_Y, WIDTH, BOTTOM_WINDOW_HEIGHT, ILI9341_COLOR(255, 255, 255));
+    ili9341_rect(0, BOTTOM_WINDOW_Y, WIDTH, BOTTOM_WINDOW_HEIGHT, ILI9341_COLOR(255, 255, 255));
 }
 
 void create_miniseed_record(uint32_t timestamp_ms, float a_x, float a_y, float a_z, uint8_t *buffer) {
