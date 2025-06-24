@@ -1,8 +1,9 @@
+# Version 1.0.4
+# ILI9341 driver with default font only
 from machine import Pin, SPI
 from time import sleep_ms
 import framebuf
 
-# ILI9341 Commands
 ILI9341_SWRESET = 0x01
 ILI9341_SLPOUT = 0x11
 ILI9341_DISPON = 0x29
@@ -12,14 +13,13 @@ ILI9341_RAMWR = 0x2C
 ILI9341_MADCTL = 0x36
 ILI9341_COLMOD = 0x3A
 
-# Memory Access Control (MADCTL) Bits
-MADCTL_MY = 0x80  # Mirror Y
-MADCTL_MX = 0x40  # Mirror X
-MADCTL_MV = 0x20  # Memory Data Access Control
-MADCTL_ML = 0x10  # LCD Refresh Bottom to Top
+MADCTL_MY = 0x80
+MADCTL_MX = 0x40
+MADCTL_MV = 0x20
+MADCTL_ML = 0x10
 MADCTL_RGB = 0x00
 MADCTL_BGR = 0x08
-MADCTL_MH = 0x04  # LCD Refresh Right to Left
+MADCTL_MH = 0x04
 
 class ILI9341:
     def __init__(self, spi, cs, dc, rst, width=240, height=320, rotation=0):
@@ -33,7 +33,6 @@ class ILI9341:
         self.buffer = bytearray(width * height * 2)
         self.framebuf = framebuf.FrameBuffer(self.buffer, width, height, framebuf.RGB565)
         
-        # Initialize display
         self.reset()
         self.init_display()
         
@@ -61,22 +60,20 @@ class ILI9341:
         self.write_cmd(ILI9341_SLPOUT)
         sleep_ms(255)
         
-        # Memory Data Access Control
         madctl = 0x00
-        if self.rotation == 0:   # Portrait
+        if self.rotation == 0:
             madctl = MADCTL_MX | MADCTL_BGR
-        elif self.rotation == 1: # Landscape
-            madctl = MADCTL_MV | MADCTL_MX | MADCTL_BGR
-        elif self.rotation == 2: # Inverted Portrait
+        elif self.rotation == 1:
+            madctl = MADCTL_MV | MADCTL_BGR
+        elif self.rotation == 2:
             madctl = MADCTL_MY | MADCTL_BGR
-        elif self.rotation == 3: # Inverted Landscape
+        elif self.rotation == 3:
             madctl = MADCTL_MV | MADCTL_MY | MADCTL_BGR
         self.write_cmd(ILI9341_MADCTL)
         self.write_data(bytes([madctl]))
         
-        # Pixel Format Set
         self.write_cmd(ILI9341_COLMOD)
-        self.write_data(bytes([0x55]))  # 16-bit color
+        self.write_data(bytes([0x55]))
         
         self.write_cmd(ILI9341_DISPON)
         sleep_ms(10)
@@ -96,6 +93,12 @@ class ILI9341:
         
     def vline(self, x, y, h, color):
         self.framebuf.vline(x, y, h, color)
+        
+    def fill_rect(self, x, y, w, h, color):
+        self.framebuf.fill_rect(x, y, w, h, color)
+        
+    def rect(self, x, y, w, h, color):
+        self.framebuf.rect(x, y, w, h, color)
         
     def show(self):
         self.set_window(0, 0, self.width - 1, self.height - 1)
