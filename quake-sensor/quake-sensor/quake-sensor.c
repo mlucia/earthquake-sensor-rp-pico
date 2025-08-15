@@ -6,9 +6,11 @@
 #include "hardware/i2c.h"
 #include "hardware/spi.h"
 #include "hardware/uart.h"
+#include "hardware/rtc.h"
 #include "ili9341.h"
+#include "pico/util/datetime.h"
 
-#define VERSION "1.1.3"
+#define VERSION "1.1.1"
 
 #define I2C_PORT i2c0
 #define I2C_SDA 0
@@ -35,7 +37,6 @@
 #define BW_RATE 0x2C
 #define DATAX0 0x32
 #define ADS1115_ADDR 0x48
-#define DS3231_ADDR 0x68
 
 #define TOP_WINDOW_Y 0
 #define TOP_WINDOW_HEIGHT 120
@@ -55,11 +56,6 @@ typedef struct {
     char timestamp_str[9];
     float voltage;
 } Reading;
-
-typedef struct {
-    uint8_t sec, min, hour, day, month;
-    uint16_t year;
-} datetime_t;
 
 void kalman_init(KalmanFilter *kf) {
     kf->x = 0.0f;
@@ -83,44 +79,6 @@ float max_magnitude = 0.0f;
 int magnitude_count = 0;
 KalmanFilter kalman_x, kalman_y, kalman_z;
 
-bool ds3231_init() {
-    uint8_t addr_list[3];
-    int num = i2c_read_blocking(I2C_PORT, 0x00, addr_list, 3, false);
-    for (int i = 0; i < num; i++) {
-        if (addr_list[i] == DS3231_ADDR) return true;
-    }
-    ili9341_fill(0);
-    ili9341_text("DS3231 Not Found", 0, 0, ILI9341_COLOR(255, 255, 255));
-    ili9341_show();
-    return false;
-}
-
-void ds3231_set_time(datetime_t *dt) {
-    uint8_t data[8];
-    data[0] = 0x00; // Start at seconds register
-    data[1] = ((dt->sec / 10) << 4) | (dt->sec % 10); // BCD seconds
-    data[2] = ((dt->min / 10) << 4) | (dt->min % 10); // BCD minutes
-    data[3] = ((dt->hour / 10) << 4) | (dt->hour % 10); // BCD hours, 24-hour mode
-    data[4] = 0x01; // Day of week (not used, set to Monday)
-    data[5] = ((dt->day / 10) << 4) | (dt->day % 10); // BCD day
-    data[6] = ((dt->month / 10) << 4) | (dt->month % 10); // BCD month
-    data[7] = (((dt->year - 2000) / 10) << 4) | ((dt->year - 2000) % 10); // BCD year
-    i2c_write_blocking(I2C_PORT, DS3231_ADDR, data, 8, false);
-}
-
-void ds3231_get_time(datetime_t *dt) {
-    uint8_t reg = 0x00; // Start at seconds register
-    uint8_t data[7];
-    i2c_write_blocking(I2C_PORT, DS3231_ADDR, &reg, 1, true);
-    i2c_read_blocking(I2C_PORT, DS3231_ADDR, data, 7, false);
-    dt->sec = ((data[0] >> 4) * 10) + (data[0] & 0x0F);
-    dt->min = ((data[1] >> 4) * 10) + (data[1] & 0x0F);
-    dt->hour = ((data[2] >> 4) * 10) + (data[2] & 0x0F);
-    dt->day = ((data[4] >> 4) * 10) + (data[4] & 0x0F);
-    dt->month = ((data[5] >> 4) * 10) + (data[5] & 0x0F);
-    dt->year = 2000 + ((data[6] >> 4) * 10) + (data[6] & 0x0F);
-}
-
 bool adxl345_init() {
     uint8_t data[2];
     data[0] = POWER_CTL;
@@ -141,8 +99,8 @@ error:
 }
 
 bool ads1115_init() {
-    uint8_t addr_list[3];
-    int num = i2c_read_blocking(I2C_PORT, 0x00, addr_list, 3, false);
+    uint8_t addr_list[2];
+    int num = i2c_read_blocking(I2C_PORT, 0x00, addr_list, 2, false);
     for (int i = 0; i < num; i++) {
         if (addr_list[i] == ADS1115_ADDR) return true;
     }
@@ -205,7 +163,7 @@ void create_miniseed_record(uint32_t timestamp_ms, float a_x, float a_y, float a
     memcpy(buffer + 14, "Z ", 2);
     memcpy(buffer + 16, "XX", 2);
     datetime_t dt;
-    ds3231_get_time(&dt);
+    rtc_get_datetime(&dt);
     uint16_t year = dt.year;
     uint16_t day = (dt.month << 8) | dt.day;
     buffer[20] = year >> 8; buffer[21] = year & 0xFF;
@@ -227,7 +185,7 @@ void create_miniseed_record(uint32_t timestamp_ms, float a_x, float a_y, float a
 bool timer_callback(repeating_timer_t *rt) {
     uint64_t start_time_us = time_us_64();
     datetime_t dt;
-    ds3231_get_time(&dt);
+    rtc_get_datetime(&dt);
     
     int16_t raw_x, raw_y, raw_z;
     if (!read_accel(&raw_x, &raw_y, &raw_z)) return true;
@@ -300,15 +258,16 @@ int main() {
     ili9341_show();
     sleep_ms(2000);
 
-    if (!adxl345_init() || !ads1115_init() || !ds3231_init()) {
+    if (!adxl345_init() || !ads1115_init()) {
         while (true) sleep_ms(1000);
     }
 
     datetime_t dt = {
-        .year = 2025, .month = 8, .day = 8,
-        .hour = 18, .min = 6, .sec = 0 // 11:06 MST = 18:06 UTC
+        .year = 2025, .month = 6, .day = 24,
+        .hour = 20, .min = 6, .sec = 0
     };
-    ds3231_set_time(&dt);
+    rtc_init();
+    rtc_set_datetime(&dt);
 
     struct repeating_timer timer;
     add_repeating_timer_ms(10, timer_callback, NULL, &timer);

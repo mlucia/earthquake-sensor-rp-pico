@@ -1,14 +1,14 @@
 # Earthquake Sensor for Raspberry Pi Pico 2 W
 
-This project implements a seismic sensor using a Raspberry Pi Pico 2 W, an ADXL345 accelerometer, an ADS1115 ADC, and an ILI9341 2.8" TFT display, written in C/C++ with the Pico SDK. Version `1.1.1` migrates from MicroPython (v1.1.0), using default 8x8 font, 20 MHz SPI, miniSEED UART output, A0 voltage display, and 100 Hz sampling.
+This project implements a seismic sensor using a Raspberry Pi Pico 2 W, an ADXL345 accelerometer, an ADS1115 ADC, a DS3231 RTC, and an ILI9341 2.8" TFT display, written in C/C++ with the Pico SDK. Version `1.1.3` replaces software timekeeping (v1.1.2) with a DS3231 RTC for accurate timekeeping, using a 20 MHz SPI, miniSEED UART output, A0 voltage display, and 100 Hz sampling.
 
 ## Features
-- **Version**: `1.1.1` (displayed for 2s at boot).
+- **Version**: `1.1.3` (displayed for 2s at boot).
 - **Display**: 90° rotated (320x240), split into top (y=0–119) and bottom (y=120–239) windows with white borders.
   - Top: "Network Disabled" (y=8, 8x8 font).
   - Bottom: Raw g values (y=128, 8x8 font), A0 voltage (y=144, yellow), graph (y=180–239, bottom 25%).
 - **Sampling**: 100 Hz for ADXL345 and ADS1115 with Kalman filtering.
-- **Time**: RTC set to 2025-06-24 01:06 PM MST (20:06 UTC).
+- **Time**: DS3231 RTC set to 2025-08-08 11:06:00 MST (18:06 UTC).
 - **UART**: miniSEED records at 100 Hz (TX=Pin 8, 115200 baud, 48-byte header + 6-byte data).
 - **ADS1115**: Reads A0 voltage (6.144V range), displayed in bottom window.
 - **Test Program**: `test_ili9341.c` tests text, lines, color bars, and "TEST" with 8x8 font.
@@ -19,6 +19,7 @@ This project implements a seismic sensor using a Raspberry Pi Pico 2 W, an ADXL3
 - **ADXL345**: I2C0, SDA=GP0, SCL=GP1, VCC=3.3V, GND=Pin 38.
 - **ADS1115**: I2C0, SDA=GP0, SCL=GP1, VCC=3.3V, GND=Pin 38, ADDR=GND (0x48).
   - A0: Connect to voltage source (0–6.144V) or leave unconnected for testing.
+- **DS3231**: I2C0, SDA=GP0, SCL=GP1, VCC=3.3V, GND=Pin 38, address 0x68.
 - **UART**: TX=GP8, RX=GP9.
 
 ## Software Setup
@@ -33,18 +34,18 @@ This project implements a seismic sensor using a Raspberry Pi Pico 2 W, an ADXL3
    make
    ```
    Flash `main.uf2` or `test_ili9341.uf2` to Pico via USB (BOOTSEL mode).
-6. Verify files: `main.c`, `ili9341.c`, `ili9341.h`, `test_ili9341.c`, `CMakeLists.txt`.
+6. Verify files: `main.c`, `ili9341.c`, `ili9341.h`, `test_ili9341.c`, `CMakeLists.txt`, `VERSION.txt`.
 
 ## Running
-1. **Main**: Flash `main.uf2`. Displays "Version 1.1.1" (2s), "Network Disabled" (top), raw g, A0 voltage, graph (bottom), miniSEED via UART.
+1. **Main**: Flash `main.uf2`. Displays "Version 1.1.3" (2s), "Network Disabled" (top), raw g, A0 voltage, graph (bottom), miniSEED via UART.
 2. **Test**: Flash `test_ili9341.uf2`. Tests text, lines, bars, and "TEST".
 
 ## Testing
 - **Display**: Verify readable 8x8 font, A0 voltage, borders, graph.
-- **I2C**: Use debug tool or modify `main.c` to print `i2c_read_blocking` results (expect `0x53`, `0x48`).
+- **I2C**: Use debug tool or modify `main.c` to print `i2c_read_blocking` results (expect `0x53`, `0x48`, `0x68`).
 - **UART**: Monitor TX=GP8, 115200 baud, for 54-byte miniSEED records.
 - **ADS1115**: Connect A0 to 3.3V, verify ~3.3V on display.
-- **Time**: 2025-06-24 01:06:00 MST.
+- **DS3231**: Verify time (2025-08-08 11:06:00 MST) in miniSEED records and display timestamp.
 
 ## Troubleshooting
 - **Display Issues**:
@@ -53,6 +54,7 @@ This project implements a seismic sensor using a Raspberry Pi Pico 2 W, an ADXL3
 - **I2C**: Verify SDA/SCL (GP0, GP1), add 4.7kΩ pull-ups to 3.3V if needed.
 - **UART**: Use serial monitor to verify miniSEED output.
 - **ADS1115**: If A0 voltage is 0V, check A0 wiring or debug `read_ads1115()`.
+- **DS3231**: If time is incorrect, check I2C address (0x68) or debug `ds3231_get_time()`.
 - **Build Errors**: Ensure Pico SDK is correctly installed and paths are set.
 
 ## Future Improvements
@@ -60,6 +62,7 @@ This project implements a seismic sensor using a Raspberry Pi Pico 2 W, an ADXL3
 - Enable WiFi/NTP/OTA (requires RP2040 WiFi libraries).
 - Add SD card logging.
 - Enable touchscreen (XPT2046).
+- Extend `font_8x8` in `ili9341.c` for full ASCII (32–126).
 
 ## License
 MIT License (see `LICENSE` if added).

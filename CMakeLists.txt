@@ -1,24 +1,3 @@
-#
-include(pico_sdk_import.cmake)
-
-set(TARGET RP2345)
-pico_package_uf2_output(TARGET PACKADDR) 
-# == DO NOT EDIT THE FOLLOWING LINES for the Raspberry Pi Pico VS Code Extension to work ==
-if(WIN32)
-    set(USERHOME $ENV{USERPROFILE})
-else()
-    set(USERHOME $ENV{HOME})
-endif()
-set(sdkVersion 2.1.1)
-set(toolchainVersion 14_2_Rel1)
-set(picotoolVersion 2.1.1)
-set(picoVscode ${USERHOME}/.pico-sdk/cmake/pico-vscode.cmake)
-if (EXISTS ${picoVscode})
-    include(${picoVscode})
-endif()
-# ====================================================================================
-set(PICO_BOARD pico CACHE STRING "Board type")
-
 cmake_minimum_required(VERSION 3.13)
 include(pico_sdk_import.cmake)
 project(earthquake-sensor C CXX ASM)
@@ -27,7 +6,7 @@ set(CMAKE_CXX_STANDARD 17)
 pico_sdk_init()
 add_executable(main main.c ili9341.c)
 add_executable(test_ili9341 test_ili9341.c ili9341.c)
-target_link_libraries(main pico_stdlib hardware_spi hardware_i2c hardware_uart hardware_rtc)
+target_link_libraries(main pico_stdlib hardware_spi hardware_i2c hardware_uart)
 target_link_libraries(test_ili9341 pico_stdlib hardware_spi)
 pico_add_extra_outputs(main)
 pico_add_extra_outputs(test_ili9341)

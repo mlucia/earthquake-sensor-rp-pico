@@ -1,10 +1,5 @@
-<<<<<<< HEAD:legacy/ili9341.py
 # Version 1.0.4
 # ILI9341 driver with default font only
-=======
-# Version 1.0.3
-# ILI9341 driver with support for 16x8 glcdfont and use_font parameter
->>>>>>> 743414e (reorg - again):ili9341.py
 from machine import Pin, SPI
 from time import sleep_ms
 import framebuf
@@ -27,7 +22,7 @@ MADCTL_BGR = 0x08
 MADCTL_MH = 0x04
 
 class ILI9341:
-    def __init__(self, spi, cs, dc, rst, width=240, height=320, rotation=0, font=None):
+    def __init__(self, spi, cs, dc, rst, width=240, height=320, rotation=0):
         self.spi = spi
         self.cs = cs
         self.dc = dc
@@ -37,7 +32,6 @@ class ILI9341:
         self.rotation = rotation % 4
         self.buffer = bytearray(width * height * 2)
         self.framebuf = framebuf.FrameBuffer(self.buffer, width, height, framebuf.RGB565)
-        self.font = font
         
         self.reset()
         self.init_display()
@@ -94,19 +88,8 @@ class ILI9341:
     def fill(self, color):
         self.framebuf.fill(color)
         
-    def text(self, string, x, y, color, use_font=True):
-        if use_font and self.font:
-            for char in string:
-                char_idx = ord(char)
-                if char_idx < len(self.font.font):
-                    glyph = self.font.font[char_idx]
-                    for row in range(8):
-                        for col in range(16):
-                            if glyph[row] & (1 << col):
-                                self.framebuf.pixel(x + (15 - col), y + row, color)
-                x += 16
-        else:
-            self.framebuf.text(string, x, y, color)
+    def text(self, string, x, y, color):
+        self.framebuf.text(string, x, y, color)
         
     def vline(self, x, y, h, color):
         self.framebuf.vline(x, y, h, color)
